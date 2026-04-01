@@ -1,0 +1,12 @@
+.conda/
+
+datasets/*
+!dataset/.gitkeep
+
+outputs/*
+!outputs/.gitkeep
+
+__pycache__/
+*.pyc
+
+__init__.py
