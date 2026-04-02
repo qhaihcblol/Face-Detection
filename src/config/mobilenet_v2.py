@@ -12,7 +12,7 @@ cfg_mobilenet_v2 = {
     "epochs": 250,
     "milestones": [190, 220],
     # input
-    "image_size": 896,
+    "image_size": 640,
     # backbone
     "pretrain": True,
     "return_layers": [6, 13, 18],
