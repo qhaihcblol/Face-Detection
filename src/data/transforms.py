@@ -16,6 +16,14 @@ __all__ = [
 ]
 
 
+def _normalize_bgr_mean(
+    bgr_mean: tuple[float, float, float] | tuple[float, ...],
+) -> tuple[float, float, float]:
+    if len(bgr_mean) != 3:
+        raise ValueError("bgr_mean must have exactly 3 values (B, G, R)")
+    return float(bgr_mean[0]), float(bgr_mean[1]), float(bgr_mean[2])
+
+
 class RetinaFaceTrainTransform:
     """
     Standard RetinaFace train-time preprocessing and augmentation.
@@ -44,7 +52,7 @@ class RetinaFaceTrainTransform:
             raise ValueError("max_crop_trials must be positive")
 
         self.image_size = int(image_size)
-        self.bgr_mean = tuple(float(v) for v in bgr_mean)
+        self.bgr_mean = _normalize_bgr_mean(bgr_mean)
         self.min_face_size = float(min_face_size)
         self.crop_scales = tuple(float(scale) for scale in crop_scales)
         self.max_crop_trials = int(max_crop_trials)
@@ -94,7 +102,7 @@ class RetinaFaceEvalTransform:
             raise ValueError("image_size must be positive")
 
         self.image_size = int(image_size)
-        self.bgr_mean = tuple(float(v) for v in bgr_mean)
+        self.bgr_mean = _normalize_bgr_mean(bgr_mean)
         self.pad_to_square = bool(pad_to_square)
 
     def __call__(
@@ -186,7 +194,7 @@ def _to_numpy_rgb_image(image: Tensor | Image.Image | np.ndarray) -> np.ndarray:
 
 
 def _photometric_distort(image: np.ndarray) -> np.ndarray:
-    pil_image = Image.fromarray(image, mode="RGB")
+    pil_image = Image.fromarray(image)
 
     if random.random() < 0.5:
         pil_image = ImageEnhance.Brightness(pil_image).enhance(
@@ -204,7 +212,15 @@ def _photometric_distort(image: np.ndarray) -> np.ndarray:
         hsv = np.asarray(pil_image.convert("HSV"), dtype=np.uint8).copy()
         hue_delta = random.randint(-18, 18)
         hsv[..., 0] = (hsv[..., 0].astype(np.int16) + hue_delta) % 255
-        pil_image = Image.fromarray(hsv, mode="HSV").convert("RGB")
+        pil_image = Image.frombuffer(
+            "HSV",
+            pil_image.size,
+            hsv.tobytes(),
+            "raw",
+            "HSV",
+            0,
+            1,
+        ).convert("RGB")
 
     if not contrast_first and random.random() < 0.5:
         pil_image = ImageEnhance.Contrast(pil_image).enhance(random.uniform(0.75, 1.25))
@@ -366,7 +382,7 @@ def _resize_with_targets(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     original_height, original_width = image.shape[:2]
     resized_image = np.asarray(
-        Image.fromarray(image, mode="RGB").resize(
+        Image.fromarray(image).resize(
             (output_size, output_size), resample=Image.Resampling.BILINEAR
         ),
         dtype=np.uint8,

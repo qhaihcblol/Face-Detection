@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,14 @@ from ..detection.prior_box import PriorBox
 from ..models.retinaface import RetinaFace
 
 __all__ = ["FaceDetector"]
+
+
+@dataclass(frozen=True)
+class _PreprocessMeta:
+    scale_x: float
+    scale_y: float
+    original_width: int
+    original_height: int
 
 
 class FaceDetector:
@@ -103,22 +112,68 @@ class FaceDetector:
         keep_top_k: int | None = None,
         assume_bgr: bool = False,
     ) -> list[dict[str, Any]]:
-        conf_thr = float(
-            self.conf_threshold if conf_threshold is None else conf_threshold
+        conf_thr, nms_thr, pre_nms_top_k, post_nms_top_k = (
+            self._resolve_detection_params(
+                conf_threshold=conf_threshold,
+                nms_threshold=nms_threshold,
+                top_k=top_k,
+                keep_top_k=keep_top_k,
+            )
         )
-        nms_thr = float(self.nms_threshold if nms_threshold is None else nms_threshold)
-        pre_nms_top_k = int(self.top_k if top_k is None else top_k)
-        post_nms_top_k = int(self.keep_top_k if keep_top_k is None else keep_top_k)
 
         image_rgb = self._to_numpy_rgb_image(image, assume_bgr=assume_bgr)
-        input_tensor, scale = self._preprocess(image_rgb)
+        input_tensor, preprocess_meta = self._preprocess(image_rgb)
 
-        loc, conf, landm = self.model(input_tensor)
+        loc, conf, landm = self.forward_raw(input_tensor)
+        boxes, scores, landms = self._postprocess_predictions(
+            loc,
+            conf,
+            landm,
+            preprocess_meta=preprocess_meta,
+            conf_threshold=conf_thr,
+            nms_threshold=nms_thr,
+            top_k=pre_nms_top_k,
+            keep_top_k=post_nms_top_k,
+        )
+        return self._format_detections(boxes, scores, landms)
+
+    def forward_raw(self, input_tensor: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        return self.model(input_tensor)
+
+    def _resolve_detection_params(
+        self,
+        *,
+        conf_threshold: float | None,
+        nms_threshold: float | None,
+        top_k: int | None,
+        keep_top_k: int | None,
+    ) -> tuple[float, float, int, int]:
+        return (
+            float(self.conf_threshold if conf_threshold is None else conf_threshold),
+            float(self.nms_threshold if nms_threshold is None else nms_threshold),
+            int(self.top_k if top_k is None else top_k),
+            int(self.keep_top_k if keep_top_k is None else keep_top_k),
+        )
+
+    def _postprocess_predictions(
+        self,
+        loc: Tensor,
+        conf: Tensor,
+        landm: Tensor,
+        *,
+        preprocess_meta: _PreprocessMeta,
+        conf_threshold: float,
+        nms_threshold: float,
+        top_k: int,
+        keep_top_k: int,
+    ) -> tuple[Tensor, Tensor, Tensor]:
         scores = conf.squeeze(0)[:, 1]
-
-        valid = scores > conf_thr
-        if valid.sum().item() == 0:
-            return []
+        valid = scores > conf_threshold
+        if not bool(torch.any(valid)):
+            empty_boxes = loc.new_zeros((0, 4))
+            empty_scores = conf.new_zeros((0,))
+            empty_landms = landm.new_zeros((0, 5, 2))
+            return empty_boxes, empty_scores, empty_landms
 
         boxes = decode(loc.squeeze(0), self.priors, self.cfg["variance"])
         landms = decode_landm(landm.squeeze(0), self.priors, self.cfg["variance"])
@@ -127,65 +182,66 @@ class FaceDetector:
         landms = landms[valid]
         scores = scores[valid]
 
-        scale_box = torch.tensor(
+        scale_box = boxes.new_tensor(
             [
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-            ],
-            dtype=boxes.dtype,
-            device=boxes.device,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+            ]
         )
-        scale_landm = torch.tensor(
+        scale_landm = landms.new_tensor(
             [
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-                float(self.image_size) * scale["x"],
-                float(self.image_size) * scale["y"],
-            ],
-            dtype=landms.dtype,
-            device=landms.device,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+                float(self.image_size) * preprocess_meta.scale_x,
+                float(self.image_size) * preprocess_meta.scale_y,
+            ]
         )
         boxes = boxes * scale_box
         landms = landms * scale_landm
 
-        original_height = int(scale["original_height"])
-        original_width = int(scale["original_width"])
-        boxes[:, 0::2] = boxes[:, 0::2].clamp_(0.0, max(float(original_width - 1), 0.0))
-        boxes[:, 1::2] = boxes[:, 1::2].clamp_(
-            0.0, max(float(original_height - 1), 0.0)
-        )
-        landms[:, 0::2] = landms[:, 0::2].clamp_(
-            0.0, max(float(original_width - 1), 0.0)
-        )
-        landms[:, 1::2] = landms[:, 1::2].clamp_(
-            0.0, max(float(original_height - 1), 0.0)
-        )
+        max_x = max(float(preprocess_meta.original_width - 1), 0.0)
+        max_y = max(float(preprocess_meta.original_height - 1), 0.0)
+        boxes[:, 0::2] = boxes[:, 0::2].clamp_(0.0, max_x)
+        boxes[:, 1::2] = boxes[:, 1::2].clamp_(0.0, max_y)
+        landms[:, 0::2] = landms[:, 0::2].clamp_(0.0, max_x)
+        landms[:, 1::2] = landms[:, 1::2].clamp_(0.0, max_y)
 
         order = torch.argsort(scores, descending=True)
-        if pre_nms_top_k > 0:
-            order = order[:pre_nms_top_k]
+        if top_k > 0:
+            order = order[:top_k]
         boxes = boxes[order]
         landms = landms[order]
         scores = scores[order]
 
-        keep = self._nms(boxes, scores, threshold=nms_thr)
-        if post_nms_top_k > 0:
-            keep = keep[:post_nms_top_k]
+        keep = self._nms(boxes, scores, threshold=nms_threshold)
+        if keep_top_k > 0:
+            keep = keep[:keep_top_k]
 
-        boxes = boxes[keep].detach().cpu().numpy()
-        landms = landms[keep].detach().cpu().numpy().reshape(-1, 5, 2)
-        scores = scores[keep].detach().cpu().numpy()
+        return boxes[keep], scores[keep], landms[keep].reshape(-1, 5, 2)
+
+    @staticmethod
+    def _format_detections(
+        boxes: Tensor,
+        scores: Tensor,
+        landms: Tensor,
+    ) -> list[dict[str, Any]]:
+        if boxes.numel() == 0:
+            return []
+
+        boxes_np = boxes.detach().cpu().numpy()
+        landms_np = landms.detach().cpu().numpy()
+        scores_np = scores.detach().cpu().numpy()
 
         detections: list[dict[str, Any]] = []
-        for box, score, landmark in zip(boxes, scores, landms):
+        for box, score, landmark in zip(boxes_np, scores_np, landms_np):
             detections.append(
                 {
                     "bbox": box.tolist(),
@@ -252,7 +308,7 @@ class FaceDetector:
             image_size=(self.image_size, self.image_size),
         ).forward()
 
-    def _preprocess(self, image_rgb: np.ndarray) -> tuple[Tensor, dict[str, float]]:
+    def _preprocess(self, image_rgb: np.ndarray) -> tuple[Tensor, _PreprocessMeta]:
         original_height, original_width = image_rgb.shape[:2]
         processed = image_rgb
 
@@ -272,7 +328,7 @@ class FaceDetector:
         resampling_module = getattr(Image, "Resampling", Image)
         bilinear = getattr(resampling_module, "BILINEAR")
         resized = np.asarray(
-            Image.fromarray(processed, mode="RGB").resize(
+            Image.fromarray(processed).resize(
                 (self.image_size, self.image_size),
                 resample=bilinear,
             ),
@@ -284,13 +340,13 @@ class FaceDetector:
         tensor = torch.from_numpy(np.ascontiguousarray(image_bgr)).permute(2, 0, 1)
         tensor = tensor.unsqueeze(0).to(self.device)
 
-        scale = {
-            "x": float(processed_width) / float(self.image_size),
-            "y": float(processed_height) / float(self.image_size),
-            "original_width": float(original_width),
-            "original_height": float(original_height),
-        }
-        return tensor, scale
+        preprocess_meta = _PreprocessMeta(
+            scale_x=float(processed_width) / float(self.image_size),
+            scale_y=float(processed_height) / float(self.image_size),
+            original_width=int(original_width),
+            original_height=int(original_height),
+        )
+        return tensor, preprocess_meta
 
     @staticmethod
     def _resolve_device(device: str | torch.device | None) -> torch.device:

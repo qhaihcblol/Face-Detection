@@ -3,13 +3,10 @@ from __future__ import annotations
 import argparse
 import itertools
 import math
-import os
 import time
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Sequence
-
-os.environ.setdefault("MKL_THREADING_LAYER", "GNU")
+from typing import Any, Callable, Sequence
 
 import torch
 from torch import Tensor
@@ -233,10 +230,8 @@ def set_learning_rate(
         group["lr"] = base_lr * scale
 
 
-def build_grad_scaler(device: torch.device, enabled: bool) -> Any:
-    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
-        return torch.amp.GradScaler(device.type, enabled=enabled)
-    return torch.cuda.amp.GradScaler(enabled=enabled)
+def build_grad_scaler(enabled: bool):
+    return torch.GradScaler(enabled=enabled)
 
 
 def train_one_epoch(
@@ -257,7 +252,7 @@ def train_one_epoch(
     limit_batches: int,
     use_amp: bool,
     show_progress: bool,
-    log: callable,
+    log: Callable[..., None],
 ) -> tuple[EpochMeters, int, float]:
     model.train()
     criterion.train()
@@ -418,7 +413,7 @@ def main() -> None:
         gamma=args.gamma,
     )
     use_amp = bool(args.amp and device.type == "cuda")
-    scaler = build_grad_scaler(device, use_amp)
+    scaler = build_grad_scaler(use_amp)
 
     base_lrs = [group["lr"] for group in optimizer.param_groups]
     priors = (

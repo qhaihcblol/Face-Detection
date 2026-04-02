@@ -123,7 +123,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None,
-    scaler: torch.cuda.amp.GradScaler | None,
+    scaler: torch.GradScaler | None,
     epoch: int,
     global_step: int,
     best_loss: float,
@@ -156,7 +156,7 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-    scaler: torch.cuda.amp.GradScaler | None = None,
+    scaler: torch.GradScaler | None = None,
     device: torch.device | str = "cpu",
     strict: bool = True,
 ) -> dict[str, Any]:
