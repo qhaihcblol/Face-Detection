@@ -1,7 +1,7 @@
 .conda/
 
 datasets/*
-!dataset/.gitkeep
+!datasets/.gitkeep
 
 outputs/*
 !outputs/.gitkeep

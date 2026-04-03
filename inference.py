@@ -11,17 +11,18 @@ def main():
         metadata_path="onnx/retinaface.json",
     )
 
-    image_path = "datasets/val/images/0--Parade/0_Parade_marchingband_1_20.jpg"
+    image_path = "test.jpeg"
 
     # detect
     detections = detector.detect(image_path)
-
-    # draw kết quả
+    
     result = detector.draw(image_path, detections)
-
+    for detection in detections:
+        print(f"Detection: {detection}")
     Image.fromarray(result).save("output_result2.jpg")
     print("Saved to output_result.jpg")
 
 
 if __name__ == "__main__":
     main()
+    

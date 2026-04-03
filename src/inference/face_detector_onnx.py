@@ -8,8 +8,6 @@ from typing import Any, Sequence, cast
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import torch
-from torch import Tensor
 
 __all__ = ["FaceDetectorONNX", "FaceDetectorOnnx"]
 
@@ -88,7 +86,7 @@ class FaceDetectorONNX:
 
     def detect(
         self,
-        image: str | Path | Image.Image | np.ndarray | Tensor,
+        image: str | Path | Image.Image | np.ndarray,
         *,
         conf_threshold: float | None = None,
         nms_threshold: float | None = None,
@@ -152,7 +150,7 @@ class FaceDetectorONNX:
 
     def draw(
         self,
-        image: str | Path | Image.Image | np.ndarray | Tensor,
+        image: str | Path | Image.Image | np.ndarray,
         detections: list[dict[str, Any]],
         *,
         assume_bgr: bool = False,
@@ -334,7 +332,7 @@ class FaceDetectorONNX:
 
     @staticmethod
     def _to_numpy_rgb_image(
-        image: str | Path | Image.Image | np.ndarray | Tensor,
+        image: str | Path | Image.Image | np.ndarray,
         *,
         assume_bgr: bool,
     ) -> np.ndarray:
@@ -344,26 +342,6 @@ class FaceDetectorONNX:
 
         if isinstance(image, Image.Image):
             return np.asarray(image.convert("RGB"), dtype=np.uint8)
-
-        if isinstance(image, Tensor):
-            image = image.detach().cpu()
-            if image.dim() != 3:
-                raise ValueError("tensor image must have shape (C, H, W) or (H, W, C)")
-
-            if image.shape[0] in {1, 3}:
-                array = image.permute(1, 2, 0).numpy()
-            else:
-                array = image.numpy()
-
-            if array.ndim != 3:
-                raise ValueError("tensor image must be 3-dimensional")
-            if array.shape[2] == 1:
-                array = np.repeat(array, 3, axis=2)
-
-            array = FaceDetectorONNX._to_uint8(array)
-            if assume_bgr:
-                array = array[:, :, ::-1]
-            return array
 
         if isinstance(image, np.ndarray):
             if image.ndim != 3:
