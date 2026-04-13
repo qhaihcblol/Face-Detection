@@ -6,8 +6,10 @@ datasets/*
 outputs/*
 !outputs/.gitkeep
 
+onnx/*
+!onnx/.gitkeep
+
 __pycache__/
 *.pyc
 
-__init__.py
 
